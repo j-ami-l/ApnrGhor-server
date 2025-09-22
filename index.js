@@ -32,6 +32,7 @@ async function run() {
     try {
         const userCollection = client.db("apnrghor").collection("userinfo");
         const apartmentCollection = client.db("apnrghor").collection("appartments");
+        const agreementCollection = client.db("apnrghor").collection("agreements");
 
 
         app.get("/apartments", async (req, res) => {
@@ -46,11 +47,49 @@ async function run() {
             res.json({ apartments, totalPages });
         });
 
-        app.get('/user' , async (req, res) => {
+        app.get('/user', async (req, res) => {
             const email = req.query;
             const result = await userCollection.findOne(email)
             res.send(result)
         })
+
+        app.get('/agreementrqst' , async (req , res) =>{
+            const result = await agreementCollection.find({status: "pending"}).toArray()
+            res.send(result)
+        })
+
+        app.post('/addagreement', async (req, res) => {
+            try {
+                const { name, email, floor_no, block_name, apartment_no, rent } = req.body;
+
+                // ✅ Prevent duplicate agreement by the same user
+                const existing = await agreementCollection.findOne({ email });
+                if (existing) {
+                    return res.status(400).json({ message: "You already applied for an apartment!" });
+                }
+
+                const newAgreement = {
+                    name,
+                    email,
+                    floor_no,
+                    block_name,
+                    apartment_no,
+                    rent,
+                    status: "pending",
+                    createdAt: new Date(),
+                };
+
+                const result = await agreementCollection.insertOne(newAgreement);
+
+                res.status(201).json({ message: "Agreement request submitted!", result });
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Server error while creating agreement" });
+            }
+        });
+
+
+
 
         app.post("/adduser", upload.single("photo"), async (req, res) => {
             try {
