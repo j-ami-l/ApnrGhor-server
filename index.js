@@ -121,6 +121,42 @@ async function run() {
             }
         })
 
+        app.post("/validate-coupon", async (req, res) => {
+            try {
+                const { coupon } = req.body;
+
+                if (!coupon) {
+                    return res.status(400).json({ success: false, message: "No coupon provided." });
+                }
+
+                const couponData = await couponsCollection.findOne({ code: coupon });
+
+                if (!couponData) {
+                    return res.json({ success: false, message: "Invalid coupon code." });
+                }
+
+                // Example checks: you can extend this with your own logic
+                if (couponData.expired) {
+                    return res.json({ success: false, message: "Coupon has expired." });
+                }
+
+                if (couponData.used) {
+                    return res.json({ success: false, message: "Coupon already used." });
+                }
+
+                // ✅ Coupon is valid
+                return res.json({
+                    success: true,
+                    message: "Coupon applied successfully!",
+                    discount: couponData.discount || 0, // send discount % back
+                });
+            } catch (err) {
+                console.error("Error validating coupon:", err);
+                return res.status(500).json({ success: false, message: "Server error." });
+            }
+        });
+
+
         app.get('/paymenthistory', async (req, res) => {
             const months = [
                 "January", "February", "March", "April",
@@ -137,43 +173,73 @@ async function run() {
                 },
                 { $sort: { paid_year: 1, monthIndex: 1 } }
             ]).toArray();
-            
+
             res.send(payments);
         })
 
         app.post("/create-payment-intent", async (req, res) => {
             try {
-                const { id, month } = req.body;
+                const { id, month, coupon } = req.body;
                 const filter = { _id: new ObjectId(id) };
 
+                // find agreement info
                 const result1 = await agreementCollection.findOne(filter);
+                if (!result1) {
+                    return res.status(404).send({ error: "Agreement not found" });
+                }
 
+                let rentAmount = result1.rent;
+                let discountApplied = 0;
+
+                // ✅ Check coupon if provided
+                if (coupon) {
+                    const couponDoc = await couponsCollection.findOne({ code: coupon });
+
+                    if (couponDoc) {
+                        discountApplied = couponDoc.discount;
+                        rentAmount = Math.round(rentAmount - (rentAmount * discountApplied) / 100);
+                    } else {
+                        return res.send({ success: false, message: "Invalid coupon code" });
+                    }
+                }
+
+                // ✅ Stripe needs amount in cents
                 const paymentIntent = await stripe.paymentIntents.create({
-                    amount: result1.rent,
+                    amount: rentAmount * 100,
                     currency: "usd",
                     automatic_payment_methods: { enabled: true },
                 });
 
                 const currentYear = new Date().getFullYear();
 
+                // ✅ Save payment history
                 const newPayment = {
                     name: result1.name,
                     email: result1.email,
                     agreement_id: result1._id,
-                    paymentAmount: result1.rent,
+                    paymentAmount: rentAmount,
                     paid_month: month,
                     paid_year: currentYear,
                     createdAt: new Date(),
+                    coupon: coupon || null,
+                    discountApplied,
                 };
 
-                const result = await paymentCollection.insertOne(newPayment);
+                await paymentCollection.insertOne(newPayment);
 
-                res.send({ clientSecret: paymentIntent.client_secret });
+                res.send({
+                    clientSecret: paymentIntent.client_secret,
+                    success: true,
+                    message: discountApplied
+                        ? `Coupon applied: ${discountApplied}% off. Final amount: $${rentAmount}`
+                        : "Payment intent created successfully",
+                });
             } catch (error) {
                 console.error("Payment error:", error);
                 res.status(500).send({ error: error.message });
             }
         });
+
 
 
         app.post("/announcment", async (req, res) => {
