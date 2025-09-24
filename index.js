@@ -5,6 +5,11 @@ const streamifier = require("streamifier");
 const { v2: cloudinary } = require("cloudinary");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
+const Stripe = require("stripe");
+
+const router = express.Router();
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
 
 const app = express();
 app.use(express.json());
@@ -28,6 +33,9 @@ const client = new MongoClient(uri, {
     serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
 });
 
+
+
+
 async function run() {
     try {
         const userCollection = client.db("apnrghor").collection("userinfo");
@@ -35,6 +43,7 @@ async function run() {
         const agreementCollection = client.db("apnrghor").collection("agreements");
         const announcmentCollection = client.db("apnrghor").collection("announcment");
         const couponsCollection = client.db("apnrghor").collection("coupons");
+        const paymentCollection = client.db("apnrghor").collection("payments");
 
 
         app.get("/apartments", async (req, res) => {
@@ -44,7 +53,7 @@ async function run() {
 
             const total = await apartmentCollection.countDocuments();
             const totalPages = Math.ceil(total / limit);
-            const apartments = await apartmentCollection.find().skip(skip).limit(limit).toArray();
+            const apartments = await apartmentCollection.find({ available: { $ne: false } }).skip(skip).limit(limit).toArray();
 
             res.json({ apartments, totalPages });
         });
@@ -61,16 +70,34 @@ async function run() {
         })
 
 
-
         app.get('/allmembers', async (req, res) => {
             const result = await userCollection.find({ role: "member" }).toArray()
             res.send(result)
         })
 
-        app.get('/announcements' , async(req , res)=>{
+        app.get('/announcements', async (req, res) => {
             const result = await announcmentCollection.find().toArray()
             res.send(result)
         })
+
+        app.get('/specificagreement', async (req, res) => {
+            try {
+                const email = req.query.email;
+                if (!email) {
+                    return res.status(400).send({ message: "Email is required" });
+                }
+
+                const result = await agreementCollection.findOne({
+                    email: email,
+                    status: "checked"
+                });
+
+
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: "Server error", error });
+            }
+        });
 
         app.get("/coupons", async (req, res) => {
             try {
@@ -83,7 +110,41 @@ async function run() {
             }
         });
 
+        app.get('/allcoupons', async (req, res) => {
+            try {
+                const coupons = await couponsCollection.find().toArray();
 
+                res.status(200).send(coupons)
+            } catch (error) {
+                console.error("Error fetching coupons:", error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        })
+
+        app.post("/create-payment-intent", async (req, res) => {
+            try {
+                const { id } = req.body;
+                const filter = {_id : new ObjectId(id)}
+                const result1 = await agreementCollection.findOne(filter)
+                const paymentIntent = await stripe.paymentIntents.create({
+                    amount:result1.rent,
+                    currency: "usd",
+                    automatic_payment_methods: { enabled: true },
+                });
+                const newPayment = {
+                    name : result1.name,
+                    email : result1.email,
+                    agreement_id : result1._id,
+                    paymentAmount : result1.rent
+                }
+                const up  = await agreementCollection.updateOne(filter,{$set: {paid:true}})
+                const result = await paymentCollection.insertOne(newPayment)
+                res.send({ clientSecret: paymentIntent.client_secret });
+                
+            } catch (error) {
+                res.status(500).send({ error: error.message });
+            }
+        });
 
         app.post("/announcment", async (req, res) => {
             const announcment = req.body;
@@ -123,7 +184,7 @@ async function run() {
 
         app.post('/addagreement', async (req, res) => {
             try {
-                const { name, email, floor_no, block_name, apartment_no, rent } = req.body;
+                const { name, email, floor_no, block_name, apartment_no, rent , agreement_id } = req.body;
 
                 const existing = await agreementCollection.findOne({ email });
                 if (existing) {
@@ -138,11 +199,15 @@ async function run() {
                     block_name,
                     apartment_no,
                     rent,
+                    agreement_id,
+                    paid : false,
                     status: "pending",
                     createdAt: new Date(),
                 };
 
-
+                const filter = {_id : new ObjectId(agreement_id)}
+                const update = {available : false}
+                const result2 = await apartmentCollection.updateOne(filter, {$set : update})
                 const result = await agreementCollection.insertOne(newAgreement);
 
                 res.status(201).json({ message: "Agreement request submitted!", result });
