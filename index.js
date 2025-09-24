@@ -121,30 +121,60 @@ async function run() {
             }
         })
 
+        app.get('/paymenthistory', async (req, res) => {
+            const months = [
+                "January", "February", "March", "April",
+                "May", "June", "July", "August",
+                "September", "October", "November", "December"
+            ];
+            const { email } = req.query
+            const payments = await paymentCollection.aggregate([
+                { $match: { email } },
+                {
+                    $addFields: {
+                        monthIndex: { $indexOfArray: [months, "$paid_month"] }
+                    }
+                },
+                { $sort: { paid_year: 1, monthIndex: 1 } }
+            ]).toArray();
+            
+            res.send(payments);
+        })
+
         app.post("/create-payment-intent", async (req, res) => {
             try {
-                const { id } = req.body;
-                const filter = {_id : new ObjectId(id)}
-                const result1 = await agreementCollection.findOne(filter)
+                const { id, month } = req.body;
+                const filter = { _id: new ObjectId(id) };
+
+                const result1 = await agreementCollection.findOne(filter);
+
                 const paymentIntent = await stripe.paymentIntents.create({
-                    amount:result1.rent,
+                    amount: result1.rent,
                     currency: "usd",
                     automatic_payment_methods: { enabled: true },
                 });
+
+                const currentYear = new Date().getFullYear();
+
                 const newPayment = {
-                    name : result1.name,
-                    email : result1.email,
-                    agreement_id : result1._id,
-                    paymentAmount : result1.rent
-                }
-                const up  = await agreementCollection.updateOne(filter,{$set: {paid:true}})
-                const result = await paymentCollection.insertOne(newPayment)
+                    name: result1.name,
+                    email: result1.email,
+                    agreement_id: result1._id,
+                    paymentAmount: result1.rent,
+                    paid_month: month,
+                    paid_year: currentYear,
+                    createdAt: new Date(),
+                };
+
+                const result = await paymentCollection.insertOne(newPayment);
+
                 res.send({ clientSecret: paymentIntent.client_secret });
-                
             } catch (error) {
+                console.error("Payment error:", error);
                 res.status(500).send({ error: error.message });
             }
         });
+
 
         app.post("/announcment", async (req, res) => {
             const announcment = req.body;
@@ -184,7 +214,7 @@ async function run() {
 
         app.post('/addagreement', async (req, res) => {
             try {
-                const { name, email, floor_no, block_name, apartment_no, rent , agreement_id } = req.body;
+                const { name, email, floor_no, block_name, apartment_no, rent, agreement_id } = req.body;
 
                 const existing = await agreementCollection.findOne({ email });
                 if (existing) {
@@ -200,14 +230,13 @@ async function run() {
                     apartment_no,
                     rent,
                     agreement_id,
-                    paid : false,
                     status: "pending",
                     createdAt: new Date(),
                 };
 
-                const filter = {_id : new ObjectId(agreement_id)}
-                const update = {available : false}
-                const result2 = await apartmentCollection.updateOne(filter, {$set : update})
+                const filter = { _id: new ObjectId(agreement_id) }
+                const update = { available: false }
+                const result2 = await apartmentCollection.updateOne(filter, { $set: update })
                 const result = await agreementCollection.insertOne(newAgreement);
 
                 res.status(201).json({ message: "Agreement request submitted!", result });
