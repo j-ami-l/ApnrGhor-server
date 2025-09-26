@@ -94,6 +94,56 @@ async function run() {
             res.send(result)
         })
 
+        app.get("/dashboard-stats", async (req, res) => {
+            try {
+                // 1️⃣ Users count
+                const [userCounts, apartmentCounts, agreementCounts] = await Promise.all([
+                    userCollection.aggregate([
+                        { $match: { role: { $in: ["user", "member"] } } },
+                        { $group: { _id: "$role", count: { $sum: 1 } } }
+                    ]).toArray(),
+
+                    // 2️⃣ Apartments count & available
+                    apartmentCollection.aggregate([
+                        {
+                            $group: {
+                                _id: null,
+                                totalApartments: { $sum: 1 },
+                                availableApartments: { $sum: { $cond: ["$available", 1, 0] } }
+                            }
+                        }
+                    ]).toArray(),
+
+                    // 3️⃣ Agreement/unavailable rooms count
+                    apartmentCollection.countDocuments({ available: false })
+                ]);
+
+                const totalApartments = apartmentCounts[0]?.totalApartments || 0;
+                const availableApartments = apartmentCounts[0]?.availableApartments || 0;
+                const unavailableApartments = agreementCounts || 0;
+
+                const stats = {
+                    totalRooms: totalApartments,
+                    availablePercentage:
+                        totalApartments > 0
+                            ? ((availableApartments / totalApartments) * 100).toFixed(2) + "%"
+                            : "0%",
+                    unavailablePercentage:
+                        totalApartments > 0
+                            ? ((unavailableApartments / totalApartments) * 100).toFixed(2) + "%"
+                            : "0%",
+                    users: userCounts.find((u) => u._id === "user")?.count || 0,
+                    members: userCounts.find((u) => u._id === "member")?.count || 0,
+                };
+
+                res.json(stats);
+            } catch (error) {
+                console.error("Error fetching dashboard stats:", error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        });
+
+
         app.get('/specificagreement', async (req, res) => {
             try {
                 const email = req.query.email;
