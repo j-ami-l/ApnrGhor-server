@@ -51,12 +51,26 @@ async function run() {
             const limit = parseInt(req.query.limit) || 6;
             const skip = (page - 1) * limit;
 
-            const total = await apartmentCollection.countDocuments();
+            const minRent = parseInt(req.query.minRent) || 0;
+            const maxRent = parseInt(req.query.maxRent) || Number.MAX_SAFE_INTEGER;
+
+            const filter = {
+                available: { $ne: false },
+                rent: { $gte: minRent, $lte: maxRent }
+            };
+
+            const total = await apartmentCollection.countDocuments(filter);
             const totalPages = Math.ceil(total / limit);
-            const apartments = await apartmentCollection.find({ available: { $ne: false } }).skip(skip).limit(limit).toArray();
+
+            const apartments = await apartmentCollection
+                .find(filter)
+                .skip(skip)
+                .limit(limit)
+                .toArray();
 
             res.json({ apartments, totalPages });
         });
+
 
         app.get('/user', async (req, res) => {
             const email = req.query;
@@ -181,8 +195,6 @@ async function run() {
             try {
                 const { id, month, coupon } = req.body;
                 const filter = { _id: new ObjectId(id) };
-
-                // find agreement info
                 const result1 = await agreementCollection.findOne(filter);
                 if (!result1) {
                     return res.status(404).send({ error: "Agreement not found" });
@@ -191,7 +203,6 @@ async function run() {
                 let rentAmount = result1.rent;
                 let discountApplied = 0;
 
-                // ✅ Check coupon if provided
                 if (coupon) {
                     const couponDoc = await couponsCollection.findOne({ code: coupon });
 
@@ -203,7 +214,6 @@ async function run() {
                     }
                 }
 
-                // ✅ Stripe needs amount in cents
                 const paymentIntent = await stripe.paymentIntents.create({
                     amount: rentAmount * 100,
                     currency: "usd",
@@ -212,7 +222,7 @@ async function run() {
 
                 const currentYear = new Date().getFullYear();
 
-                // ✅ Save payment history
+
                 const newPayment = {
                     name: result1.name,
                     email: result1.email,
@@ -252,7 +262,6 @@ async function run() {
             try {
                 const { code, discount, description, createdBy } = req.body;
 
-                // ✅ basic validation
                 if (!code || !discount) {
                     return res.status(400).json({ message: "Code and discount are required" });
                 }
@@ -265,7 +274,6 @@ async function run() {
                     createdAt: new Date(),
                 };
 
-                // assuming you have MongoDB collection
                 const result = await couponsCollection.insertOne(newCoupon);
 
                 res.status(201).json({
