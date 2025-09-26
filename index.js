@@ -211,7 +211,7 @@ async function run() {
             }
         });
 
-        app.get("/coupons", async (req, res) => {
+        app.get("/couponsAdmin", verifyToken , verifyEmail_query , verifyAdmin_query , async (req, res) => {
             try {
                 const coupons = await couponsCollection.find().toArray();
 
@@ -222,16 +222,17 @@ async function run() {
             }
         });
 
-        app.get('/allcoupons', async (req, res) => {
+        app.get("/coupons", async (req, res) => {
             try {
-                const coupons = await couponsCollection.find().toArray();
+                const coupons = await couponsCollection.find({"status" : "public"}).toArray();
 
                 res.status(200).send(coupons)
             } catch (error) {
                 console.error("Error fetching coupons:", error);
                 res.status(500).json({ message: "Internal server error" });
             }
-        })
+        });
+
 
         app.post("/validate-coupon", verifyToken, async (req, res) => {
             try {
@@ -358,7 +359,7 @@ async function run() {
 
         app.post("/addcoupons", async (req, res) => {
             try {
-                const { code, discount, description, createdBy } = req.body;
+                const { code, discount, description, createdBy, status } = req.body;
 
                 if (!code || !discount) {
                     return res.status(400).json({ message: "Code and discount are required" });
@@ -369,6 +370,7 @@ async function run() {
                     discount: parseFloat(discount),
                     description: description || "",
                     createdBy: createdBy || "Admin",
+                    status: status,
                     createdAt: new Date(),
                 };
 
@@ -469,26 +471,55 @@ async function run() {
             }
         });
 
+        app.patch('/couponsstatus', verifyToken , verifyAdmin_query_obj , async (req, res) => {
+            try {
+                const { id, email } = req.query; // you are also sending email
+                const { status } = req.body;
 
-        app.patch('/removemember', verifyToken, verifyAdmin_query_obj , async (req, res) => {
+                if (!id) {
+                    return res.status(400).send({ message: "Coupon ID is required" });
+                }
+
+                const filter = { _id: new ObjectId(id) };
+
+                // ✅ use $set so only status is updated
+                const updateDoc = {
+                    $set: { status },
+                };
+
+                const result = await couponsCollection.updateOne(filter, updateDoc);
+
+                if (result.modifiedCount > 0) {
+                    res.send({ success: true, message: `Coupon status updated to ${status}` });
+                } else {
+                    res.status(404).send({ success: false, message: "Coupon not found or no change" });
+                }
+            } catch (error) {
+                console.error("Error updating coupon:", error);
+                res.status(500).send({ success: false, message: "Internal Server Error" });
+            }
+        });
+
+
+        app.patch('/removemember', verifyToken, verifyAdmin_query_obj, async (req, res) => {
             const { id } = req.query
             const filter = { _id: new ObjectId(id) }
             const result1 = await userCollection.findOne(filter);
             const apart_id = result1.apartment_id;
-            const filter1 = {_id : new ObjectId(apart_id)}
-            const result2 = await apartmentCollection.updateOne(filter1 , {$set : {"available" : true}})
+            const filter1 = { _id: new ObjectId(apart_id) }
+            const result2 = await apartmentCollection.updateOne(filter1, { $set: { "available": true } })
             const result = await userCollection.updateOne(filter, { $set: { role: "user" } })
             res.send(result)
         })
 
-        app.patch("/acceptagreement", verifyToken, verifyEmail_query , verifyAdmin_query , async (req, res) => {
+        app.patch("/acceptagreement", verifyToken, verifyEmail_query, verifyAdmin_query, async (req, res) => {
             const user_mail = req.body.email;
             const filter = { _id: new ObjectId(req.body.agree_id) }
             const update = {
                 $set: { status: "checked" }
             }
             const result = await agreementCollection.findOne(filter)
-            const result1 = await userCollection.updateOne({ email: user_mail }, { $set: { role: "member" , "apartment_id" : result.agreement_id } })
+            const result1 = await userCollection.updateOne({ email: user_mail }, { $set: { role: "member", "apartment_id": result.agreement_id } })
             const result2 = await agreementCollection.updateOne(filter, update)
             res.send(result1)
 
