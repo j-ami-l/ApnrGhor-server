@@ -21,7 +21,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: ["http://localhost:5173"], credentials: true }));
+app.use(cors({ origin: ["http://localhost:5173" , "https://apnr-ghor.vercel.app"], credentials: true }));
 
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -507,6 +507,7 @@ async function run() {
             const result1 = await userCollection.findOne(filter);
             const apart_id = result1.apartment_id;
             const filter1 = { _id: new ObjectId(apart_id) }
+            const result3 = await agreementCollection.deleteOne({"email":result1.email})
             const result2 = await apartmentCollection.updateOne(filter1, { $set: { "available": true } })
             const result = await userCollection.updateOne(filter, { $set: { role: "user" } })
             res.send(result)
