@@ -6,6 +6,14 @@ const { v2: cloudinary } = require("cloudinary");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 const Stripe = require("stripe");
+const admin = require("firebase-admin");
+
+const decoded = Buffer.from(process.env.FB_SERVICES_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded)
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
 
 const router = express.Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -34,6 +42,24 @@ const client = new MongoClient(uri, {
 });
 
 
+const verifyToken = async (req, res, next) => {
+    const accessToken = req.headers?.authorization
+    if (!accessToken || !accessToken.startsWith("Bearer ")) return res.status(401).send({ message: "unauthorized access" })
+    const token = accessToken.split(" ")[1]
+    try {
+        const decoded = await admin.auth().verifyIdToken(token)
+        req.decoded = decoded
+        next();
+    }
+    catch (error) {
+        return res.status(401).send({ message: "unauthorized access" })
+    }
+}
+
+const verifyEmail_query = async (req, res, next) => {
+    if (req.decoded.email === req.query.email) next()
+    else return res.status(401).send({ message: "unauthorized access" })
+}
 
 
 async function run() {
@@ -44,6 +70,27 @@ async function run() {
         const announcmentCollection = client.db("apnrghor").collection("announcment");
         const couponsCollection = client.db("apnrghor").collection("coupons");
         const paymentCollection = client.db("apnrghor").collection("payments");
+
+
+        const verifyAdmin_query = async (req, res, next) => {
+            const email = req.query.email;
+            const filter = { email: email };
+            const result = await userCollection.findOne(filter)
+            if (result.role === "ADMIN") next();
+            else return res.status(401).send({ message: "unauthorized access" })
+        }
+
+        const verifyAdmin_query_obj = async (req, res, next) => {
+            const { email } = req.query;
+            if (email === req.decoded.email) {
+                const filter = { email: email };
+                const result = await userCollection.findOne(filter)
+                if (result.role === "ADMIN") next();
+                else return res.status(401).send({ message: "unauthorized access" })
+            }
+            else return res.status(401).send({ message: "unauthorized access" })
+        }
+
 
 
         app.get("/apartments", async (req, res) => {
@@ -72,29 +119,30 @@ async function run() {
         });
 
 
-        app.get('/user', async (req, res) => {
+        app.get('/user', verifyToken, async (req, res) => {
             const email = req.query;
             const result = await userCollection.findOne(email)
             res.send(result)
         })
 
-        app.get('/agreementrqst', async (req, res) => {
+        app.get('/agreementrqst', verifyToken, verifyEmail_query, verifyAdmin_query, async (req, res) => {
             const result = await agreementCollection.find({ status: "pending" }).toArray()
             res.send(result)
         })
 
 
-        app.get('/allmembers', async (req, res) => {
+        app.get('/allmembers', verifyToken, verifyEmail_query, verifyAdmin_query, async (req, res) => {
             const result = await userCollection.find({ role: "member" }).toArray()
             res.send(result)
         })
 
-        app.get('/announcements', async (req, res) => {
+
+        app.get('/announcements', verifyToken, async (req, res) => {
             const result = await announcmentCollection.find().toArray()
             res.send(result)
         })
 
-        app.get("/dashboard-stats", async (req, res) => {
+        app.get("/dashboard-stats", verifyToken, async (req, res) => {
             try {
                 // 1️⃣ Users count
                 const [userCounts, apartmentCounts, agreementCounts] = await Promise.all([
@@ -144,7 +192,7 @@ async function run() {
         });
 
 
-        app.get('/specificagreement', async (req, res) => {
+        app.get('/specificagreement', verifyToken, verifyEmail_query, async (req, res) => {
             try {
                 const email = req.query.email;
                 if (!email) {
@@ -185,7 +233,7 @@ async function run() {
             }
         })
 
-        app.post("/validate-coupon", async (req, res) => {
+        app.post("/validate-coupon", verifyToken, async (req, res) => {
             try {
                 const { coupon } = req.body;
 
@@ -221,7 +269,7 @@ async function run() {
         });
 
 
-        app.get('/paymenthistory', async (req, res) => {
+        app.get('/paymenthistory', verifyToken, verifyEmail_query, async (req, res) => {
             const months = [
                 "January", "February", "March", "April",
                 "May", "June", "July", "August",
@@ -241,7 +289,7 @@ async function run() {
             res.send(payments);
         })
 
-        app.post("/create-payment-intent", async (req, res) => {
+        app.post("/create-payment-intent", verifyToken, async (req, res) => {
             try {
                 const { id, month, coupon } = req.body;
                 const filter = { _id: new ObjectId(id) };
@@ -302,7 +350,7 @@ async function run() {
 
 
 
-        app.post("/announcment", async (req, res) => {
+        app.post("/announcment", verifyToken, verifyEmail_query, verifyAdmin_query, async (req, res) => {
             const announcment = req.body;
             const result = await announcmentCollection.insertOne(announcment);
             res.status(201).json({ message: "Announcement added successfully", announcment });
@@ -336,7 +384,7 @@ async function run() {
             }
         });
 
-        app.post('/addagreement', async (req, res) => {
+        app.post('/addagreement', verifyToken, async (req, res) => {
             try {
                 const { name, email, floor_no, block_name, apartment_no, rent, agreement_id } = req.body;
 
@@ -422,36 +470,45 @@ async function run() {
         });
 
 
-        app.patch('/removemember/:id', async (req, res) => {
-            const { id } = req.params
+        app.patch('/removemember', verifyToken, verifyAdmin_query_obj , async (req, res) => {
+            const { id } = req.query
             const filter = { _id: new ObjectId(id) }
+            const result1 = await userCollection.findOne(filter);
+            const apart_id = result1.apartment_id;
+            const filter1 = {_id : new ObjectId(apart_id)}
+            const result2 = await apartmentCollection.updateOne(filter1 , {$set : {"available" : true}})
             const result = await userCollection.updateOne(filter, { $set: { role: "user" } })
-            console.log(result);
-
             res.send(result)
         })
 
-        app.patch("/acceptagreement", async (req, res) => {
+        app.patch("/acceptagreement", verifyToken, verifyEmail_query , verifyAdmin_query , async (req, res) => {
             const user_mail = req.body.email;
             const filter = { _id: new ObjectId(req.body.agree_id) }
             const update = {
                 $set: { status: "checked" }
             }
-            const result1 = await userCollection.updateOne({ email: user_mail }, { $set: { role: "member" } })
+            const result = await agreementCollection.findOne(filter)
+            const result1 = await userCollection.updateOne({ email: user_mail }, { $set: { role: "member" , "apartment_id" : result.agreement_id } })
             const result2 = await agreementCollection.updateOne(filter, update)
             res.send(result1)
 
         })
 
-        app.delete("/deleteagreement/:id", async (req, res) => {
-            try {
-                const { id } = req.params;
 
+
+        app.delete("/deleteagreement", verifyToken, verifyAdmin_query_obj, async (req, res) => {
+            try {
+                console.log(req.query);
+
+                const { id } = req.query;
                 if (!ObjectId.isValid(id)) {
                     return res.status(400).json({ error: "Invalid ID format" });
                 }
-
                 const filter = { _id: new ObjectId(id) };
+                const result1 = await agreementCollection.findOne(filter);
+                const apart_id = result1.agreement_id;
+                const filter1 = { _id: new ObjectId(apart_id) };
+                const result2 = await apartmentCollection.updateOne(filter1, { $set: { "available": true } })
                 const result = await agreementCollection.deleteOne(filter);
 
                 if (result.deletedCount === 0) {
